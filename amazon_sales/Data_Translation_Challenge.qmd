@@ -1,0 +1,311 @@
+---
+title: "Understanding Key Drivers of Amazon Tech Product Sales in 2019"
+format: 
+  html:
+    embed-resources: true
+editor: visual
+execute:
+  echo: false
+  warning: false
+  error: false
+  message: false
+---
+
+## **Data Source**
+
+Amazon data set sales of technology products placed over several months in 2019 in a select number of urban ZIP codes.
+
+## **Objective**
+
+To understand what drives sales of Amazon tech products. These include understanding sales consistency across locations, income-driven purchasing behavior, and regional spending patterns to identify key factors that influence technology. By examining these methods, this analysis aim to uncover key insights that could guide Amazon’s decision-making process.
+
+## **Audience**
+
+Managers in Amazon’s tech products division.
+
+```{r}
+library(rio)
+library(vtable)
+library(tidyverse)
+library(scales)
+```
+
+```{r}
+# import data
+sales <- import('sales_data.Rdata')
+zip_info <- import('zip_info.csv')
+```
+
+```{r}
+# data cleaning
+sales$Quantity <- as.numeric(sales$Quantity)
+sales$PriceEach <- as.numeric(sales$PriceEach)
+
+zip_info$ZIP <- str_pad(zip_info$ZIP, width = 5, side = "left", pad = "0")
+
+# feature engineering
+sales$Date <- as.Date(sales$Date, format = "%Y-%m-%d")
+sales$YearMonth <- format(sales$Date, "%Y-%m")
+sales <- sales %>%
+  mutate(TotalSales = Quantity * PriceEach)
+
+```
+
+```{r}
+# look into the summary
+# vtable(sales, lush = TRUE, factor.limit = 9, char.values = TRUE)
+# vtable(zip_info, lush = TRUE)
+```
+
+## **Visualizations**
+
+### Visual 1: Monthly Sales Trends per ZIP Code
+
+Sales trends are analyzed at the ZIP code level to determine whether variations exist in total monthly sales. The first visualization assesses whether certain ZIP codes consistently generate higher sales volumes.\
+The first research question explored is:\
+*"[Are sales consistent across ZIP codes throughout 2019?]{.underline}"*
+
+```{r}
+monthly_sales <- sales %>%
+  filter(as.Date(paste0(sales$YearMonth, "-01")) < as.Date("2020-01-01")) %>% 
+  group_by(YearMonth, ZIP) %>%
+  summarise(TotalSales = sum(TotalSales, na.rm = TRUE), .groups = "drop")
+
+monthly_sales <- monthly_sales %>%
+  mutate(YearMonth = as.Date(paste0(YearMonth, "-01")))
+
+monthly_sales <- monthly_sales %>%
+  filter(YearMonth < as.Date("2020-01-01"))
+
+top_zips <- monthly_sales %>%
+  group_by(ZIP) %>%
+  summarise(TotalSales = sum(TotalSales)) %>%
+  top_n(2, TotalSales) %>%
+  pull(ZIP)
+
+ggplot(monthly_sales, aes(x = YearMonth)) +
+  geom_ribbon(data = filter(monthly_sales, ZIP %in% top_zips) %>%
+                spread(ZIP, TotalSales),  
+              aes(ymin = pmin(`90001`, `94016`), ymax = pmax(`90001`, `94016`)), 
+              fill = "goldenrod1", alpha = 0.3) +
+  geom_line(data = filter(monthly_sales, !ZIP %in% top_zips), 
+            aes(y = TotalSales, group = ZIP), 
+            linewidth = 0.6, linetype = "dashed", color = "lightgray") +
+  geom_line(data = filter(monthly_sales, ZIP %in% top_zips), 
+            aes(y = TotalSales, group = ZIP, color = ZIP), linewidth = 1.2) +  
+  geom_text(data = monthly_sales %>% 
+              filter(ZIP %in% top_zips) %>%
+              group_by(ZIP) %>%
+              filter(YearMonth == max(YearMonth)),
+            aes(y = TotalSales, label = ZIP, color = ZIP),
+            hjust = 1.2, vjust = 0.5, size = 4, fontface = "bold") +
+  labs(title = "Total Sales Vary by ZIP, but Trends Are Consistent",
+       x = NULL,
+       y = "Total Sales ($)") +
+  theme_minimal() +
+  scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  scale_y_continuous(labels = comma) +
+  theme(
+    axis.title.y = element_text(size = 12),
+    axis.text.y = element_text(size = 11),
+    axis.text.x = element_text(size = 11),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5)
+  )
+
+```
+
+**Insights**:\
+The results indicate that while sales trends follow a similar monthly pattern across ZIP codes, total sales vary significantly. Some ZIP codes consistently report higher revenue, suggesting that location-based factors (ZIP Code) influence purchasing behavior. But further analysis may be required to determine whether these differences are due to variations in income, population size, or other demographic characteristics.
+
+### Visual 2: Sales per Capita by ZIP Code
+
+Total sales do not provide a complete measure of consumer spending behavior, as higher sales may be driven by larger populations rather than increased spending per individual. This visualization adjusts for population size by analyzing sales per capita.\
+The research question investigated here is:\
+*"[Do certain ZIP codes exhibit higher per capita spending, or are differences driven by population size?]{.underline}"*
+
+```{r}
+zip_total_sales <- sales %>%
+  group_by(ZIP) %>%
+  summarise(TotalSales = sum(TotalSales, na.rm = TRUE))
+
+zip_total_sales_2 <- zip_total_sales %>%
+  left_join(zip_info, by = "ZIP") %>%
+  mutate(SalesPerCapita = TotalSales / TotalPopulation)
+
+ggplot(zip_total_sales_2, aes(x = reorder(ZIP, SalesPerCapita), y = SalesPerCapita)) +
+  geom_bar(stat = "identity", aes(fill = ifelse(ZIP %in% c("94016", "98101", "10001"), "high", "low"))) +
+  scale_fill_manual(values = c("high" = "dodgerblue3", "low" = "gray90"), guide = "none") +
+  geom_text(data = subset(zip_total_sales_2, ZIP %in% c("94016", "98101", "10001")),
+            aes(label = round(SalesPerCapita, 1)), 
+            hjust = 1.2, size = 3.5, fontface = "bold", color = "white") +
+  coord_flip() +
+  labs(title = "Some ZIP Codes Spend Over $200 Per Person, Others Don’t",
+       x = "ZIP Code",
+       y = "Sales per Capita ($)") +
+  theme_minimal() +
+  theme(
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_text(size = 12),
+    axis.text.y = element_text(size = 11),
+    axis.text.x = element_text(size = 11),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 15, hjust = 0.5)
+  )
+
+```
+
+**Insights**:\
+Several ZIP codes exhibit notably higher per capita spending, exceeding \$200 per person. These areas include 94016, 98101, and 10001, where consumers allocate more spending to Amazon tech products. Other ZIP codes, despite reporting high total sales, have lower per capita spending, indicating that population size rather than individual purchasing behavior may be a contributing factor. Further evaluation of income levels is necessary to determine whether purchasing power influences these trends.
+
+### Visual 3: Median Household Income vs Sales per Capita
+
+The relationship between household income and per capita sales is analyzed to determine whether income is a primary driver of spending on Amazon tech products.\
+The research question posed here is:\
+*"[Does median household income influence per capita sales?]{.underline}"*
+
+A median household income threshold of **\$90,000** is used to categorize ZIP codes into higher and lower income groups. This cutoff is based on income distribution within the dataset and provides a clear distinction between areas with relatively higher purchasing power and those with moderate income levels.
+
+```{r}
+ggplot(zip_total_sales_2, aes(x = MedianHHIncome, y = SalesPerCapita)) + 
+  geom_point(aes(color = ifelse(MedianHHIncome > 90000, "High Income", "Low Income")),
+             size = 4, alpha = 0.8) +  
+  geom_smooth(method = "lm", color = "orange", se = FALSE) +  
+  scale_color_manual(values = c("High Income" = "dodgerblue3", "Low Income" = "gray70")) +  
+  annotate("text", x = 100000, y = 250, label = "Above $90K", color = "dodgerblue3", size = 4, fontface = "bold") +
+  annotate("text", x = 60000, y = 250, label = "Below $90K", color = "gray70", size = 4, fontface = "bold") +
+  labs(
+    title = "Higher-Income ZIPs Spend More, But Not Always",
+    x = "Median Household Income ($)",
+    y = "Sales per Capita ($)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_text(size = 12),
+    axis.text.y = element_text(size = 11),
+    axis.text.x = element_text(size = 11),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5)
+  )
+```
+
+**Insights**:\
+A positive correlation is observed between income levels and per capita spending. Higher-income ZIP codes generally allocate more spending per individual. However, the correlation is not absolute, as certain lower-income ZIP codes maintain moderate spending levels. This suggests that other factors, such as marketing exposure, consumer preferences, tech adoption rates and other demographics, may influence purchasing behavior.
+
+*#notes The small sample size of 10 ZIP codes means that this correlation should be interpreted with caution since some other factors may also be influencing spending.*
+
+### Visual 4: Median Age vs Sales per Capita
+
+Another key demographic variable, age may also impact purchasing decisions. This analysis evaluates whether younger ZIP codes exhibit higher per capita sales, potentially indicating a greater rate of tech adoption.\
+The research question examined in this section is:\
+*"[Does median age correlate with per capita sales?]{.underline}"*
+
+A median age threshold of **35** is used to differentiate between younger and older ZIP codes. This value is selected based on the dataset’s distribution and helps assess whether age influences spending behavior on tech products.
+
+```{r}
+ggplot(zip_total_sales_2, aes(x = MedianAge, y = SalesPerCapita)) +
+  geom_point(aes(color = ifelse(MedianAge > 35, "Older Population", "Younger Population")),
+             size = 4, alpha = 0.8) +
+  geom_smooth(method = "lm", color = "red", se = FALSE) +
+  scale_color_manual(values = c("Older Population" = "darkgreen", "Younger Population" = "gray70")) +
+  annotate("text", x = 28, y = 250, label = "Younger Population (<=35)", color = "gray70", size = 4, fontface = "bold") +
+  annotate("text", x = 38, y = 250, label = "Older Population (>35)", color = "darkgreen", size = 4, fontface = "bold") +
+  labs(
+    title = "Age Has Little Impact on Sales per Capita",
+    x = "Median Age",
+    y = "Sales per Capita ($)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_text(size = 12),
+    axis.text.y = element_text(size = 11),
+    axis.text.x = element_text(size = 11),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5)
+  )
+```
+
+**Insights**:\
+The results show no strong correlation between median age and per capita spending. ZIP codes with younger and older populations display similar purchasing patterns, and the regression trend line remains relatively flat. This suggests that age is not a primary determinant of tech product sales, and other variables such as income, consumer behavior, or marketing effectiveness may be more significant factors. Since income shows some correlation with per capita sales while age does not, an additional analysis focuses on the frequency of high-priced purchases across income levels may be worth analyzing.
+
+*#notes we must acknowledge that our dataset is limited in scope, each ZIP code only includes a subset of available tech products. If younger or older consumers tend to purchase specific tech products not represented in this dataset, we may be missing age-based preferences that exist in the broader dataset.*
+
+### Visual 5: Frequency of High-Priced Purchase per Income Level
+
+High-income consumers may be more likely to purchase premium tech products due to greater disposable income. This analysis examines the frequency of high-priced purchases across different income brackets.\
+The research question addressed here is:\
+*"[Do higher-income consumers purchase expensive products more frequently?]{.underline}"*
+
+To define what qualifies as a high-priced purchase, a threshold of **\$500** is used. This cutoff was chosen based on a general price point that distinguishes premium tech products, such as laptops, high-end headphones, and monitors, from lower-cost accessories.
+
+```{r}
+zip_total_sales_2 <- zip_total_sales_2 %>%
+  mutate(IncomeLevel = case_when(
+    MedianHHIncome < 90000 ~ "Below 90k",
+    MedianHHIncome >= 90000 ~ "Above 90k"
+  ))
+
+sales_with_income <- sales %>%
+  left_join(zip_total_sales_2 %>% select(ZIP, IncomeLevel), by = "ZIP")
+
+high_price_threshold <- 500
+
+high_price_purchases <- sales_with_income %>%
+  mutate(HighPricedPurchase = ifelse(PriceEach > high_price_threshold, 1, 0)) %>%
+  group_by(IncomeLevel) %>%
+  summarise(HighPricePurchaseCount = sum(HighPricedPurchase, na.rm = TRUE))
+
+ggplot(high_price_purchases, aes(x = reorder(IncomeLevel,HighPricePurchaseCount), y = HighPricePurchaseCount)) +
+  geom_segment(aes(xend = IncomeLevel, y = 0, yend = HighPricePurchaseCount), 
+               color = "gray70", size = 1) +
+  geom_point(aes(fill = IncomeLevel), shape = 21, size = 8, stroke = 1.2) +
+  geom_text(aes(label = scales::comma(HighPricePurchaseCount)), 
+            color = "black", fontface = "bold", hjust = -0.5, size = 4) +
+  scale_fill_manual(values = c("Above 90k" = "tomato", "Below 90k" = "steelblue")) +
+  labs(
+    title = "High-Income ZIPs Buy More $500+ Items",
+    x = "Median Household Income ($)",
+    y = "# High-Priced Purchases"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_text(size = 12),
+    axis.text.y = element_text(size = 11),
+    axis.text.x = element_text(size = 11),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5)
+  )
+
+```
+
+**Insights**:\
+Higher-income ZIP codes account for a greater number of high-priced purchases, consistent with expectations. However, lower-income ZIP codes also exhibit a notable frequency of premium product purchases. This suggests that factors beyond income, such as financing options, promotions, or brand preferences, may contribute to purchasing decisions for high-priced items.
+
+## **Conclusion**
+
+The analysis identifies **income** as a contributing factor to per capita sales and high-priced purchases, whereas **age does not exhibit a strong correlation**. Higher-income ZIP codes generally allocate more spending per individual and purchase high-priced products more frequently. However, variations exist, as some lower-income areas continue to demonstrate significant spending.
+
+**Actionables for Amazon Managers:**\
+Amazon can use these findings to tailor its pricing, marketing, and product strategies for different ZIP codes. For high-income areas, promoting **premium products** with targeted advertising may drive conversions, while offering **financing options or installment plans** in lower-income ZIP codes could encourage high-priced purchases without requiring large upfront payments. Additionally, understanding ZIP codes with unexpectedly high spending despite lower incomes could reveal valuable behavioral insights, helping optimize promotions, bundled deals, and discounts to enhance overall sales performance.
+
+Further analysis may include:
+
+-   Evaluating differences in product categories purchased across income levels.
+
+-   Assessing the impact of promotions or discount options on high-priced purchases.
+
+-   Analyzing customer retention across ZIP codes.
+
+These findings can be used to refine marketing strategies, optimize product offerings, and improve sales targeting efforts based on location-specific spending behaviors.
